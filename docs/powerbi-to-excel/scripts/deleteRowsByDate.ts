@@ -54,9 +54,9 @@ function main(
  */
 function normalize(cell: string | number | boolean): string {
   if (typeof cell === "number") {
-    // Excel 序列号起点为 1899-12-30（UTC）。
-    const millis = Math.round(cell * 24 * 60 * 60 * 1000);
-    const date = new Date(Date.UTC(1899, 11, 30) + millis);
+    // Excel 序列号起点为 1899-12-30（UTC）；小数部分是时间，按整日截断只保留日期。
+    const days = Math.floor(cell);
+    const date = new Date(Date.UTC(1899, 11, 30) + days * 24 * 60 * 60 * 1000);
     return date.toISOString().slice(0, 10);
   }
   return String(cell).trim();
