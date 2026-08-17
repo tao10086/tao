@@ -1,0 +1,186 @@
+{
+  "$comment": "示例 Cloud Flow 定义（路线 A）。用于理解动作结构与表达式；连接器引用需在导入后按实际环境重新绑定。",
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "$connections": {
+        "defaultValue": {},
+        "type": "Object"
+      }
+    },
+    "triggers": {
+      "Recurrence": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Day",
+          "interval": 1,
+          "timeZone": "China Standard Time",
+          "schedule": {
+            "hours": ["8"],
+            "minutes": [0]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Init_varRunId": {
+        "type": "InitializeVariable",
+        "runAfter": {},
+        "inputs": {
+          "variables": [
+            {
+              "name": "varRunId",
+              "type": "string",
+              "value": "@{guid()}"
+            }
+          ]
+        }
+      },
+      "Init_varRunTime": {
+        "type": "InitializeVariable",
+        "runAfter": { "Init_varRunId": ["Succeeded"] },
+        "inputs": {
+          "variables": [
+            {
+              "name": "varRunTime",
+              "type": "string",
+              "value": "@{convertFromUtc(utcNow(),'China Standard Time','yyyy-MM-dd HH:mm:ss')}"
+            }
+          ]
+        }
+      },
+      "Init_varBizDate": {
+        "type": "InitializeVariable",
+        "runAfter": { "Init_varRunTime": ["Succeeded"] },
+        "inputs": {
+          "variables": [
+            {
+              "name": "varBizDate",
+              "type": "string",
+              "value": "@{convertFromUtc(addDays(utcNow(),-1),'China Standard Time','yyyy-MM-dd')}"
+            }
+          ]
+        }
+      },
+      "Try": {
+        "type": "Scope",
+        "runAfter": { "Init_varBizDate": ["Succeeded"] },
+        "actions": {
+          "Run_a_query_against_a_dataset": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connectionName": "shared_powerbi",
+                "operationId": "ExecuteDatasetQuery",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_powerbi"
+              },
+              "parameters": {
+                "groupId": "<WORKSPACE_ID>",
+                "datasetId": "<DATASET_ID>",
+                "body/queries/0/query": "@{concat('EVALUATE SUMMARIZECOLUMNS( ''DimRegion''[区域], FILTER( ALL(''DimDate''[Date]), ''DimDate''[Date] = DATE(', formatDateTime(variables('varBizDate'),'yyyy'), ',', formatDateTime(variables('varBizDate'),'MM'), ',', formatDateTime(variables('varBizDate'),'dd'), ') ), \"销售额\", [Total Sales], \"订单数\", [Order Count] )')}"
+              }
+            }
+          },
+          "Parse_JSON": {
+            "type": "ParseJson",
+            "runAfter": { "Run_a_query_against_a_dataset": ["Succeeded"] },
+            "inputs": {
+              "content": "@body('Run_a_query_against_a_dataset')?['firstTableRows']",
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "[区域]": { "type": "string" },
+                    "[销售额]": { "type": "number" },
+                    "[订单数]": { "type": "number" }
+                  }
+                }
+              }
+            }
+          },
+          "Delete_existing_rows_for_the_day": {
+            "$comment": "幂等：先删除当天旧行，再写入。脚本见 scripts/deleteRowsByDate.ts。",
+            "type": "OpenApiConnection",
+            "runAfter": { "Parse_JSON": ["Succeeded"] },
+            "inputs": {
+              "host": {
+                "connectionName": "shared_excelonlinebusiness",
+                "operationId": "RunScriptProd",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_excelonlinebusiness"
+              },
+              "parameters": {
+                "source": "me",
+                "drive": "<DRIVE_ID>",
+                "file": "<FILE_ID>",
+                "scriptId": "<DELETE_ROWS_BY_DATE_SCRIPT_ID>",
+                "scriptParameters/matchValue": "@{variables('varBizDate')}",
+                "scriptParameters/tableName": "TB_Log",
+                "scriptParameters/columnName": "日期"
+              }
+            }
+          },
+          "Select_rows_for_Excel": {
+            "$comment": "映射为与表头一致的对象数组，并做数值类型转换。",
+            "type": "Select",
+            "runAfter": { "Delete_existing_rows_for_the_day": ["Succeeded"] },
+            "inputs": {
+              "from": "@body('Parse_JSON')",
+              "select": {
+                "记录时间": "@variables('varRunTime')",
+                "日期": "@variables('varBizDate')",
+                "区域": "@item()?['[区域]']",
+                "销售额": "@float(coalesce(item()?['[销售额]'], 0))",
+                "订单数": "@int(coalesce(item()?['[订单数]'], 0))",
+                "运行ID": "@variables('varRunId')"
+              }
+            }
+          },
+          "Append_rows_via_Office_Script": {
+            "$comment": "批量写入，一次调用完成。脚本见 scripts/appendRowsToTable.ts。",
+            "type": "OpenApiConnection",
+            "runAfter": { "Select_rows_for_Excel": ["Succeeded"] },
+            "inputs": {
+              "host": {
+                "connectionName": "shared_excelonlinebusiness",
+                "operationId": "RunScriptProd",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_excelonlinebusiness"
+              },
+              "parameters": {
+                "source": "me",
+                "drive": "<DRIVE_ID>",
+                "file": "<FILE_ID>",
+                "scriptId": "<APPEND_ROWS_SCRIPT_ID>",
+                "scriptParameters/payload": "@{string(body('Select_rows_for_Excel'))}",
+                "scriptParameters/tableName": "TB_Log"
+              }
+            }
+          }
+        }
+      },
+      "Catch": {
+        "type": "Scope",
+        "runAfter": { "Try": ["Failed", "Skipped", "TimedOut"] },
+        "actions": {
+          "Notify_failure": {
+            "type": "OpenApiConnection",
+            "inputs": {
+              "host": {
+                "connectionName": "shared_teams",
+                "operationId": "PostMessageToConversation",
+                "apiId": "/providers/Microsoft.PowerApps/apis/shared_teams"
+              },
+              "parameters": {
+                "poster": "Flow bot",
+                "location": "Chat with Flow bot",
+                "body/recipient": "<OWNER_EMAIL>",
+                "body/messageBody": "<p>Power BI → Excel 记录流失败。</p><p>流：@{workflow()?['name']}</p><p>运行 ID：@{workflow()?['run']?['name']}</p><p>业务日期：@{variables('varBizDate')}</p><p>错误：@{string(result('Try'))}</p>"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

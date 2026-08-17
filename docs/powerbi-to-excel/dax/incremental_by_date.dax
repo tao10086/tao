@@ -1,0 +1,26 @@
+// 增量型模板：日期由 Power Automate 参数化注入，每天只取增量
+//
+// 在 Power Automate 的 "Run a query against a dataset" 的 Query Text 中，
+// 切换到表达式并使用 concat() 拼接，把 {YYYY} {MM} {DD} 替换为 varBizDate 的各部分：
+//
+// concat(
+//   'EVALUATE SUMMARIZECOLUMNS( ''DimRegion''[区域], ',
+//   'FILTER( ALL(''DimDate''[Date]), ''DimDate''[Date] = DATE(',
+//   formatDateTime(variables('varBizDate'),'yyyy'), ',',
+//   formatDateTime(variables('varBizDate'),'MM'), ',',
+//   formatDateTime(variables('varBizDate'),'dd'), ') ), ',
+//   '"销售额", [Total Sales], "订单数", [Order Count] )'
+// )
+//
+// 注意：在 Power Automate 表达式里，DAX 中的单引号需要写成两个单引号进行转义。
+
+EVALUATE
+SUMMARIZECOLUMNS (
+    'DimRegion'[区域],
+    FILTER (
+        ALL ( 'DimDate'[Date] ),
+        'DimDate'[Date] = DATE ( {YYYY}, {MM}, {DD} )
+    ),
+    "销售额", [Total Sales],
+    "订单数", [Order Count]
+)

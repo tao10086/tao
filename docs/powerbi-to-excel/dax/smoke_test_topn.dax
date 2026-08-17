@@ -1,0 +1,13 @@
+// 小样测试模板：先用 TOPN 限制为 10 行，跑通全链路后再换成正式查询。
+// 用途：验证连接、权限、Parse JSON 架构和 Excel 写入格式。
+
+EVALUATE
+TOPN (
+    10,
+    SUMMARIZECOLUMNS (
+        'DimRegion'[区域],
+        "销售额", [Total Sales],
+        "订单数", [Order Count]
+    ),
+    [销售额], DESC
+)

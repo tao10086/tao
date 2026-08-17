@@ -1,0 +1,19 @@
+// 汇总型模板：按维度聚合 + 日期范围过滤
+// 用途：每天记录"昨天"各区域的销售额与订单数
+// 注意：
+//   1. 请把 'DimRegion' / 'DimDate' / [Total Sales] / [Order Count] 换成你模型中的实际名称。
+//   2. 结果列名会带方括号，在 Power Automate 中引用为 item()?['[区域]']。
+//   3. 单次返回上限约 10 万行 / 1000 万个值，务必先聚合再返回。
+
+EVALUATE
+SUMMARIZECOLUMNS (
+    'DimRegion'[区域],
+    FILTER (
+        ALL ( 'DimDate'[Date] ),
+        'DimDate'[Date] >= DATE ( 2026, 8, 16 )
+            && 'DimDate'[Date] <= DATE ( 2026, 8, 16 )
+    ),
+    "销售额", [Total Sales],
+    "订单数", [Order Count]
+)
+ORDER BY 'DimRegion'[区域]
